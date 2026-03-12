@@ -11,11 +11,13 @@ from pydantic import ValidationError
 from pythonjsonlogger import jsonlogger
 from sqlalchemy import text
 
+from app.middleware.rate_limit_middleware import rate_limit_middleware_fn
 from app.models.database import Base
 from app.routes import auth as auth_router
 from app.routes import api_keys as api_keys_router
 from app.routes import detection as detection_router
 from app.routes import usage as usage_router
+from app.services.monitoring_service import monitoring_service
 from app.utils.config import settings
 from app.utils.db import engine
 
@@ -72,6 +74,11 @@ app.add_middleware(
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 @app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    return await rate_limit_middleware_fn(request, call_next)
+
+
+@app.middleware("http")
 async def timing_middleware(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
@@ -108,6 +115,12 @@ app.include_router(usage_router.router)
 async def health_check():
     """Liveness probe — returns current server time."""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat() + "Z"}
+
+
+@app.get("/health/detailed", tags=["System"])
+async def health_detailed():
+    """Detailed system health: database, Redis, Celery worker status."""
+    return monitoring_service.get_system_metrics()
 
 
 @app.get("/", tags=["System"])

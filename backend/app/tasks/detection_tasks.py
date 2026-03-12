@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 from app.celery_app import celery_app
+from app.services.monitoring_service import monitoring_service
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,12 @@ def process_detection(self, detection_id: int) -> dict:
             "Detection completed",
             extra={"detection_id": detection_id, "ai_probability": stub_result["ai_probability"], "ms": elapsed_ms},
         )
+        monitoring_service.log_detection_completed(
+            detection_id=detection.id,
+            user_id=detection.user_id,
+            ai_probability=stub_result["ai_probability"],
+            processing_time_ms=float(elapsed_ms),
+        )
         return {"detection_id": detection_id, "status": "completed", "ai_probability": stub_result["ai_probability"]}
 
     except FileNotFoundError as exc:
@@ -102,3 +109,8 @@ def _handle_error(db, detection_id: int, message: str, exc: Exception, task, sta
     except Exception:
         pass
     logger.error("Detection failed", extra={"detection_id": detection_id, "error": str(exc)}, exc_info=True)
+    monitoring_service.log_error(
+        error_type=type(exc).__name__,
+        error_message=str(exc),
+        endpoint="/detections",
+    )
