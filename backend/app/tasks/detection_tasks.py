@@ -22,9 +22,10 @@ def process_detection(self, detection_id: int) -> dict:
     Stages:
     1. Load Detection record
     2. Set status → 'processing'
-    3. Run ML stub (real models added Day 9+)
-    4. Persist results → 'completed'
-    5. On error → set status 'error', retry up to 3×
+    3. Reconstruct file path from metadata
+    4. Run ML ensemble (EfficientNet-B4 + Xception)
+    5. Persist results → 'completed'
+    6. On error → set status 'error', retry up to 3×
     """
     from app.models.database import Detection
     from app.utils.db import SessionLocal
@@ -46,41 +47,67 @@ def process_detection(self, detection_id: int) -> dict:
             self.update_state(state="PROGRESS", meta={"progress": 10, "message": "Starting detection…"})
         logger.info("Detection started", extra={"detection_id": detection_id, "file_type": detection.file_type})
 
-        # ── Stub ML inference ────────────────────────────────────────────────
-        # TODO Day 9+: replace with real ensemble (XceptionNet, EfficientNet, …)
-        if self.request.id:
-            self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Running ML ensemble…"})
+        # ── Reconstruct file path ────────────────────────────────────────────
+        from app.services.file_service import file_service
 
-        # Simulated result — swapped out for real inference later
-        stub_result = {
-            "ai_probability": 0.12,
-            "confidence_score": 0.91,
-            "detection_methods": "stub_ensemble:0.12",
-            "artifacts_found": [],
-        }
+        file_path = file_service.get_file_path(
+            user_id=detection.user_id,
+            file_hash=detection.file_hash,
+            original_filename=detection.original_filename or f"file.{detection.file_type}",
+        )
+
+        # ── ML Inference ─────────────────────────────────────────────────────
+        if self.request.id:
+            self.update_state(state="PROGRESS", meta={"progress": 30, "message": "Loading ML models…"})
+
+        from app.ml.ensemble import detection_ensemble
+
+        if detection.file_type == "image":
+            if self.request.id:
+                self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Running image ensemble…"})
+            ml_result = detection_ensemble.predict_image(file_path)
+        else:
+            if self.request.id:
+                self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Sampling video frames…"})
+            ml_result = detection_ensemble.predict_video(file_path, max_frames=10)
 
         # ── Persist results ──────────────────────────────────────────────────
         elapsed_ms = round((time.perf_counter() - start) * 1000)
+
         detection.processing_status = "completed"
-        detection.ai_probability = stub_result["ai_probability"]
-        detection.confidence_score = stub_result["confidence_score"]
-        detection.detection_methods = stub_result["detection_methods"]
-        detection.result_json = stub_result
+        detection.ai_probability = ml_result.ai_probability
+        detection.confidence_score = ml_result.confidence_score
+        detection.detection_methods = ml_result.detection_methods[:500]   # VARCHAR(500) limit
+        detection.result_json = {
+            "ai_probability": ml_result.ai_probability,
+            "confidence_score": ml_result.confidence_score,
+            "model_scores": ml_result.model_scores,
+            "artifacts_found": ml_result.artifacts_found,
+            "processing_time_ms": ml_result.processing_time_ms,
+        }
         detection.processing_time_ms = elapsed_ms
         detection.completed_at = datetime.utcnow()
         db.commit()
 
         logger.info(
             "Detection completed",
-            extra={"detection_id": detection_id, "ai_probability": stub_result["ai_probability"], "ms": elapsed_ms},
+            extra={
+                "detection_id": detection_id,
+                "ai_probability": ml_result.ai_probability,
+                "ms": elapsed_ms,
+            },
         )
         monitoring_service.log_detection_completed(
             detection_id=detection.id,
             user_id=detection.user_id,
-            ai_probability=stub_result["ai_probability"],
+            ai_probability=ml_result.ai_probability,
             processing_time_ms=float(elapsed_ms),
         )
-        return {"detection_id": detection_id, "status": "completed", "ai_probability": stub_result["ai_probability"]}
+        return {
+            "detection_id": detection_id,
+            "status": "completed",
+            "ai_probability": ml_result.ai_probability,
+        }
 
     except FileNotFoundError as exc:
         _handle_error(db, detection_id, "File not found (may have been deleted)", exc, self, start)
