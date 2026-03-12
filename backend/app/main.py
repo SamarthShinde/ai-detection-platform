@@ -15,6 +15,7 @@ from app.middleware.rate_limit_middleware import rate_limit_middleware_fn
 from app.models.database import Base
 from app.routes import auth as auth_router
 from app.routes import api_keys as api_keys_router
+from app.routes import batch as batch_router
 from app.routes import detection as detection_router
 from app.routes import usage as usage_router
 from app.services.monitoring_service import monitoring_service
@@ -96,8 +97,9 @@ async def timing_middleware(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-    response.headers["X-Process-Time-Ms"] = str(elapsed_ms)
-    logger.debug(
+    response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
+    log = logger.warning if elapsed_ms > 5000 else logger.debug
+    log(
         "Request handled",
         extra={"method": request.method, "path": request.url.path, "ms": elapsed_ms, "status": response.status_code},
     )
@@ -119,6 +121,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router.router)
 app.include_router(detection_router.router)
+app.include_router(batch_router.router)
 app.include_router(api_keys_router.router)
 app.include_router(usage_router.router)
 

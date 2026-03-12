@@ -1,4 +1,4 @@
-"""Detection endpoints: upload, status polling, listing, deletion."""
+"""Detection endpoints: upload, status polling, listing, deletion, retry."""
 import logging
 from datetime import datetime
 from typing import Optional
@@ -40,8 +40,11 @@ async def _upload(
     file_type: str,
     current_user: User,
     db: Session,
+    batch_id: Optional[int] = None,
 ) -> FileUploadResponse:
     """Shared upload logic for both video and image endpoints."""
+    from app.services.cache_service import cache_service
+
     # Validate
     if file_type == "video":
         valid, err = file_service.validate_video_file(file)
@@ -66,12 +69,58 @@ async def _upload(
             detail=f"File already uploaded. Use detection ID {existing.id} to check results.",
         )
 
+    # Validate batch ownership if provided
+    if batch_id is not None:
+        from app.models.database import Batch
+        batch = db.query(Batch).filter(Batch.id == batch_id).first()
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Batch {batch_id} not found")
+        if batch.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to batch")
+
     # Save to disk
     file_path = await file_service.save_file_to_disk(file, current_user.id, file_hash, file_type)
+
+    # Check cache — if hit, mark immediately completed
+    cached = cache_service.get_cached_result(db, file_hash)
+    if cached:
+        detection = Detection(
+            user_id=current_user.id,
+            batch_id=batch_id,
+            file_hash=file_hash,
+            file_type=file_type,
+            original_filename=file.filename,
+            file_size_bytes=file.size,
+            uploaded_at=datetime.utcnow(),
+            processing_status="completed",
+            ai_probability=cached.get("ai_probability"),
+            confidence_score=cached.get("confidence_score"),
+            detection_methods=(cached.get("detection_methods") or "")[:500],
+            result_json=cached,
+            processing_time_ms=cached.get("processing_time_ms"),
+            completed_at=datetime.utcnow(),
+            served_from_cache=True,
+        )
+        db.add(detection)
+        db.commit()
+        db.refresh(detection)
+        logger.info(
+            "Detection served from cache",
+            extra={"detection_id": detection.id, "file_hash": file_hash},
+        )
+        return FileUploadResponse(
+            detection_id=detection.id,
+            file_hash=file_hash,
+            file_type=file_type,
+            processing_status="completed",
+            message="File matched cache — results available immediately.",
+            polling_url=f"/detections/{detection.id}",
+        )
 
     # Persist Detection record
     detection = Detection(
         user_id=current_user.id,
+        batch_id=batch_id,
         file_hash=file_hash,
         file_type=file_type,
         original_filename=file.filename,
@@ -111,23 +160,25 @@ async def _upload(
 @router.post("/video", status_code=status.HTTP_202_ACCEPTED, response_model=FileUploadResponse)
 async def upload_video(
     file: UploadFile,
+    batch_id: Optional[int] = Query(None, description="Optional batch to add this detection to"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     _quota: None = Depends(check_quota),
 ):
     """Upload a video file for deepfake detection. Returns 202 immediately; poll for results."""
-    return await _upload(file, "video", current_user, db)
+    return await _upload(file, "video", current_user, db, batch_id=batch_id)
 
 
 @router.post("/image", status_code=status.HTTP_202_ACCEPTED, response_model=FileUploadResponse)
 async def upload_image(
     file: UploadFile,
+    batch_id: Optional[int] = Query(None, description="Optional batch to add this detection to"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     _quota: None = Depends(check_quota),
 ):
     """Upload an image file for deepfake detection. Returns 202 immediately; poll for results."""
-    return await _upload(file, "image", current_user, db)
+    return await _upload(file, "image", current_user, db, batch_id=batch_id)
 
 
 # ── Status / results ──────────────────────────────────────────────────────────
@@ -147,7 +198,6 @@ def get_detection(
 
     if s in ("pending", "processing"):
         progress = 10 if s == "pending" else 50
-        # Try to get finer progress from Celery task state
         if detection.celery_task_id:
             try:
                 result = celery_app.AsyncResult(detection.celery_task_id)
@@ -185,6 +235,53 @@ def get_detection(
         error_message=detection.error_message or "Unknown error",
         retry_available=True,
     )
+
+
+# ── Retry ──────────────────────────────────────────────────────────────────────
+
+
+@router.post("/{detection_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+def retry_detection(
+    detection_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Re-submit a failed detection to the Celery task queue."""
+    detection = db.query(Detection).filter(Detection.id == detection_id).first()
+    _assert_owns(detection, current_user)
+
+    if detection.processing_status not in ("error", "pending"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Detection is '{detection.processing_status}' — only 'error' or 'pending' can be retried.",
+        )
+
+    detection.processing_status = "pending"
+    detection.error_message = None
+    detection.ai_probability = None
+    detection.confidence_score = None
+    detection.result_json = None
+    detection.completed_at = None
+    db.commit()
+
+    task = celery_app.send_task(
+        "app.tasks.detection_tasks.process_detection",
+        args=[detection.id],
+    )
+    detection.celery_task_id = task.id
+    db.commit()
+
+    logger.info(
+        "Detection retried",
+        extra={"detection_id": detection_id, "task_id": task.id, "user_id": current_user.id},
+    )
+    return {
+        "detection_id": detection_id,
+        "status": "pending",
+        "task_id": task.id,
+        "message": "Detection re-queued for processing.",
+        "polling_url": f"/detections/{detection_id}",
+    }
 
 
 # ── List ──────────────────────────────────────────────────────────────────────
@@ -234,7 +331,6 @@ def delete_detection(
     detection = db.query(Detection).filter(Detection.id == detection_id).first()
     _assert_owns(detection, current_user)
 
-    # Best-effort file cleanup
     file_service.delete_file(current_user.id, detection.file_hash)
 
     db.delete(detection)

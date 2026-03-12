@@ -26,6 +26,30 @@ class User(Base):
     detections = relationship("Detection", back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("APIKey", back_populates="user", cascade="all, delete-orphan")
     usage_logs = relationship("UsageLog", back_populates="user", cascade="all, delete-orphan")
+    batches = relationship("Batch", back_populates="user", cascade="all, delete-orphan")
+
+
+class Batch(Base):
+    """A named collection of detections submitted together for bulk processing."""
+    __tablename__ = "batches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    batch_name = Column(String(255), nullable=False)
+    status = Column(String(20), default="created", nullable=False)  # created, processing, completed
+    files_total = Column(Integer, default=0, nullable=False)
+    files_completed = Column(Integer, default=0, nullable=False)
+    files_failed = Column(Integer, default=0, nullable=False)
+    celery_task_id = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="batches")
+    detections = relationship("Detection", back_populates="batch")
+
+    __table_args__ = (
+        Index("ix_batches_user_status", "user_id", "status"),
+    )
 
 
 class Detection(Base):
@@ -34,6 +58,7 @@ class Detection(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
     file_hash = Column(String(64), nullable=False, index=True)
     file_type = Column(String(10), nullable=False)  # "video" or "image"
     original_filename = Column(String(255), nullable=True)
@@ -48,14 +73,30 @@ class Detection(Base):
     processing_time_ms = Column(Integer, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     celery_task_id = Column(String(255), nullable=True)
+    served_from_cache = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="detections")
+    batch = relationship("Batch", back_populates="detections")
 
     __table_args__ = (
         Index("ix_detections_user_status", "user_id", "processing_status"),
         Index("ix_detections_created_at", "created_at"),
+        Index("ix_detections_batch_id", "batch_id"),
     )
+
+
+class DetectionCache(Base):
+    """Cached ML results keyed by file hash to avoid re-processing identical files."""
+    __tablename__ = "detection_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_hash = Column(String(64), unique=True, nullable=False, index=True)
+    file_type = Column(String(10), nullable=False)
+    result_json = Column(JSON, nullable=False)
+    hits = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_hit_at = Column(DateTime, nullable=True)
 
 
 class APIKey(Base):

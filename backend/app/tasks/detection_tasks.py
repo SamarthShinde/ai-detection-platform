@@ -22,10 +22,12 @@ def process_detection(self, detection_id: int) -> dict:
     Stages:
     1. Load Detection record
     2. Set status → 'processing'
-    3. Reconstruct file path from metadata
-    4. Run ML ensemble (EfficientNet-B4 + Xception)
-    5. Persist results → 'completed'
-    6. On error → set status 'error', retry up to 3×
+    3. Check cache — serve immediately if hit
+    4. Reconstruct file path from metadata
+    5. Run ML ensemble (EfficientNet-B4 + Xception)
+    6. Persist results → 'completed', populate cache
+    7. Update parent batch progress (if applicable)
+    8. On error → set status 'error', retry up to 3×
     """
     from app.models.database import Detection
     from app.utils.db import SessionLocal
@@ -46,6 +48,33 @@ def process_detection(self, detection_id: int) -> dict:
         if self.request.id:
             self.update_state(state="PROGRESS", meta={"progress": 10, "message": "Starting detection…"})
         logger.info("Detection started", extra={"detection_id": detection_id, "file_type": detection.file_type})
+
+        # ── Cache check ──────────────────────────────────────────────────────
+        from app.services.cache_service import cache_service
+
+        cached = cache_service.get_cached_result(db, detection.file_hash)
+        if cached:
+            elapsed_ms = round((time.perf_counter() - start) * 1000)
+            detection.processing_status = "completed"
+            detection.ai_probability = cached.get("ai_probability")
+            detection.confidence_score = cached.get("confidence_score")
+            detection.detection_methods = (cached.get("detection_methods") or "")[:500]
+            detection.result_json = cached
+            detection.processing_time_ms = elapsed_ms
+            detection.completed_at = datetime.utcnow()
+            detection.served_from_cache = True
+            db.commit()
+            logger.info(
+                "Detection served from cache (task)",
+                extra={"detection_id": detection_id, "file_hash": detection.file_hash},
+            )
+            _update_batch_progress(db, detection.batch_id)
+            return {
+                "detection_id": detection_id,
+                "status": "completed",
+                "ai_probability": cached.get("ai_probability"),
+                "from_cache": True,
+            }
 
         # ── Reconstruct file path ────────────────────────────────────────────
         from app.services.file_service import file_service
@@ -74,20 +103,27 @@ def process_detection(self, detection_id: int) -> dict:
         # ── Persist results ──────────────────────────────────────────────────
         elapsed_ms = round((time.perf_counter() - start) * 1000)
 
-        detection.processing_status = "completed"
-        detection.ai_probability = ml_result.ai_probability
-        detection.confidence_score = ml_result.confidence_score
-        detection.detection_methods = ml_result.detection_methods[:500]   # VARCHAR(500) limit
-        detection.result_json = {
+        result_payload = {
             "ai_probability": ml_result.ai_probability,
             "confidence_score": ml_result.confidence_score,
+            "detection_methods": ml_result.detection_methods,
             "model_scores": ml_result.model_scores,
             "artifacts_found": ml_result.artifacts_found,
             "processing_time_ms": ml_result.processing_time_ms,
         }
+
+        detection.processing_status = "completed"
+        detection.ai_probability = ml_result.ai_probability
+        detection.confidence_score = ml_result.confidence_score
+        detection.detection_methods = ml_result.detection_methods[:500]
+        detection.result_json = result_payload
         detection.processing_time_ms = elapsed_ms
         detection.completed_at = datetime.utcnow()
+        detection.served_from_cache = False
         db.commit()
+
+        # ── Populate cache for future identical uploads ───────────────────────
+        cache_service.cache_result(db, detection.file_hash, detection.file_type, result_payload)
 
         logger.info(
             "Detection completed",
@@ -103,6 +139,10 @@ def process_detection(self, detection_id: int) -> dict:
             ai_probability=ml_result.ai_probability,
             processing_time_ms=float(elapsed_ms),
         )
+
+        # ── Update parent batch ───────────────────────────────────────────────
+        _update_batch_progress(db, detection.batch_id)
+
         return {
             "detection_id": detection_id,
             "status": "completed",
@@ -122,6 +162,24 @@ def process_detection(self, detection_id: int) -> dict:
         db.close()
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _update_batch_progress(db, batch_id) -> None:
+    """Refresh batch counters after a detection completes or errors."""
+    if batch_id is None:
+        return
+    try:
+        from app.models.database import Batch
+        from app.services.batch_service import batch_service
+
+        batch = db.query(Batch).filter(Batch.id == batch_id).first()
+        if batch:
+            batch_service.get_batch_status(db, batch_id=batch_id, user_id=batch.user_id)
+    except Exception:
+        pass  # best-effort
+
+
 def _handle_error(db, detection_id: int, message: str, exc: Exception, task, start: float) -> None:
     """Set detection status to 'error' and log."""
     try:
@@ -133,6 +191,7 @@ def _handle_error(db, detection_id: int, message: str, exc: Exception, task, sta
             detection.error_message = message[:500]
             detection.processing_time_ms = round((time.perf_counter() - start) * 1000)
             db.commit()
+            _update_batch_progress(db, detection.batch_id)
     except Exception:
         pass
     logger.error("Detection failed", extra={"detection_id": detection_id, "error": str(exc)}, exc_info=True)
