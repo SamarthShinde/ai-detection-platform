@@ -53,6 +53,18 @@ def get_current_user(
     return user
 
 
+def check_quota(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Dependency that raises 429 when the user's monthly scan quota is exhausted."""
+    from app.services.usage_service import usage_service
+
+    allowed, reason = usage_service.check_quota(db, current_user.id)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=reason)
+
+
 def get_current_user_optional(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
     db: Session = Depends(get_db),

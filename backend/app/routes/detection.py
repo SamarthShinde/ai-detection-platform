@@ -16,7 +16,7 @@ from app.schemas.detection import (
 )
 from app.services.file_service import file_service
 from app.utils.db import get_db
-from app.utils.dependencies import get_current_user
+from app.utils.dependencies import check_quota, get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,7 @@ async def upload_video(
     file: UploadFile,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    _quota: None = Depends(check_quota),
 ):
     """Upload a video file for deepfake detection. Returns 202 immediately; poll for results."""
     return await _upload(file, "video", current_user, db)
@@ -123,6 +124,7 @@ async def upload_image(
     file: UploadFile,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    _quota: None = Depends(check_quota),
 ):
     """Upload an image file for deepfake detection. Returns 202 immediately; poll for results."""
     return await _upload(file, "image", current_user, db)
