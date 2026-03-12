@@ -1,0 +1,50 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+.pytest_cache/
+htmlcov/
+.coverage
+*.cover
+.hypothesis/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Uploads & Logs
+uploads/
+logs/
+
+# ML Models (large binaries)
+models/pretrained/*.pth
+models/pretrained/*.h5
+models/pretrained/*.bin
+models/pretrained/*.tar.gz
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.env.local
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+*.log
