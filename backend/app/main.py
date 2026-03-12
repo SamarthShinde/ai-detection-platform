@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from app.models.database import Base
 from app.routes import auth as auth_router
+from app.routes import detection as detection_router
 from app.utils.config import settings
 from app.utils.db import engine
 
@@ -95,6 +96,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router.router)
+app.include_router(detection_router.router)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

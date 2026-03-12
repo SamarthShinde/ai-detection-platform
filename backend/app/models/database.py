@@ -46,6 +46,7 @@ class Detection(Base):
     result_json = Column(JSON, nullable=True)
     error_message = Column(String(500), nullable=True)
     processing_time_ms = Column(Integer, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
     celery_task_id = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

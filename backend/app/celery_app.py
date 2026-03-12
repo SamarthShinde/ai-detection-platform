@@ -18,3 +18,6 @@ celery_app.conf.update(
 )
 
 celery_app.autodiscover_tasks(["app.tasks"])
+
+# Explicitly import tasks so they register when the worker starts
+import app.tasks.detection_tasks  # noqa: E402, F401
