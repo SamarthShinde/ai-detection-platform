@@ -110,8 +110,22 @@ class MonitoringService:
             "database": self._check_database(),
             "redis": self._check_redis(),
             "celery": self._check_celery(),
+            "ml": self._check_ml(),
             "api": {"status": "operational"},
         }
+
+    def _check_ml(self) -> dict:
+        try:
+            from app.ml.model_loader import model_loader
+            from app.ml.model_registry import list_models
+
+            return {
+                "device": model_loader.get_device(),
+                "loaded_models": model_loader.get_loaded_models(),
+                "available_models": [m["model_id"] for m in list_models()],
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def _check_database(self) -> dict:
         try:

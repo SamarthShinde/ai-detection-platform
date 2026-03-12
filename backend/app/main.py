@@ -47,6 +47,19 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Redis connection failed", extra={"error": str(exc)})
 
+    # ML model preloading (graceful — won't crash server on failure)
+    try:
+        from app.ml.model_loader import model_loader
+        results = model_loader.preload_all()
+        loaded = [m for m, ok in results.items() if ok]
+        failed = [m for m, ok in results.items() if not ok]
+        if loaded:
+            logger.info("ML models loaded", extra={"loaded": loaded, "device": model_loader.get_device()})
+        if failed:
+            logger.warning("Some ML models failed to load", extra={"failed": failed})
+    except Exception as exc:
+        logger.warning("ML model preload skipped", extra={"error": str(exc)})
+
     logger.info("Application startup complete", extra={"environment": settings.ENVIRONMENT})
     yield
 
