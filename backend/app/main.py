@@ -12,6 +12,7 @@ from pythonjsonlogger import jsonlogger
 from sqlalchemy import text
 
 from app.models.database import Base
+from app.routes import auth as auth_router
 from app.utils.config import settings
 from app.utils.db import engine
 
@@ -90,6 +91,10 @@ async def validation_exception_handler(request: Request, exc: ValidationError):
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception", extra={"error": str(exc), "path": request.url.path})
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(auth_router.router)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

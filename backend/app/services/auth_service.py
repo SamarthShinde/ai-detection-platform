@@ -107,5 +107,22 @@ class AuthService:
             return None
         return user
 
+    def mark_verified(self, db: Session, user_id: int) -> None:
+        """Mark a user's email as verified."""
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.is_verified = True
+            user.verified_at = datetime.utcnow()
+            db.commit()
+
+    def toggle_2fa(self, db: Session, user_id: int) -> bool:
+        """Toggle email_2fa_enabled for a user. Returns the new value."""
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        user.email_2fa_enabled = not user.email_2fa_enabled
+        db.commit()
+        return user.email_2fa_enabled
+
 
 auth_service = AuthService()

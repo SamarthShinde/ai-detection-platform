@@ -14,6 +14,8 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     subscription_tier: str
+    is_verified: bool = False
+    email_2fa_enabled: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
