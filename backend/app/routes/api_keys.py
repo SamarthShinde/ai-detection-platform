@@ -35,8 +35,9 @@ class APIKeyListItemResponse(BaseModel):
     id: int
     name: str
     created_at: datetime
-    last_used: Optional[datetime]
+    last_used_at: Optional[datetime] = None
     key_preview: str
+    is_active: bool = True
 
 
 class APIKeyListResponse(BaseModel):

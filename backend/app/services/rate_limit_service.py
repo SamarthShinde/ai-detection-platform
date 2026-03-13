@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 # Rate limit config per tier (-1 = unlimited)
 RATE_LIMIT_CONFIG: dict[str, dict] = {
-    "free":       {"requests_per_minute": 2,  "requests_per_hour": 50},
-    "pro":        {"requests_per_minute": 30, "requests_per_hour": 1000},
-    "enterprise": {"requests_per_minute": -1, "requests_per_hour": -1},
+    "free":       {"requests_per_minute": 60,  "requests_per_hour": 1000},
+    "pro":        {"requests_per_minute": 120, "requests_per_hour": 5000},
+    "enterprise": {"requests_per_minute": -1,  "requests_per_hour": -1},
 }
 
 _DEFAULT_TIER = "free"

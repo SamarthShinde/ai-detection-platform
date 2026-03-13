@@ -42,3 +42,12 @@ class Verify2FARequest(BaseModel):
 
 class ResendOTPRequest(BaseModel):
     email: EmailStr
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=255)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)

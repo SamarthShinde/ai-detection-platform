@@ -54,15 +54,16 @@ class APIKeyService:
         return user
 
     def list_api_keys(self, db: Session, user_id: int) -> list[dict]:
-        """Return active keys for *user_id* with masked key previews."""
-        keys = db.query(APIKey).filter(APIKey.user_id == user_id, APIKey.active == True).all()
+        """Return all keys (active + revoked) for *user_id* with masked key previews."""
+        keys = db.query(APIKey).filter(APIKey.user_id == user_id).order_by(APIKey.created_at.desc()).all()
         return [
             {
                 "id": k.id,
                 "name": k.name,
                 "created_at": k.created_at,
-                "last_used": k.last_used,
+                "last_used_at": k.last_used,
                 "key_preview": api_key_utils.mask_key(k.key_hash),
+                "is_active": k.active,
             }
             for k in keys
         ]

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field
 from typing import Optional, List
 from datetime import datetime
 
@@ -17,6 +17,12 @@ class UserResponse(BaseModel):
     is_verified: bool = False
     email_2fa_enabled: bool = False
     created_at: datetime
+
+    # Alias so frontend can use user.tier
+    @computed_field  # type: ignore[misc]
+    @property
+    def tier(self) -> str:
+        return self.subscription_tier
 
     model_config = {"from_attributes": True}
 

@@ -1,7 +1,7 @@
 """Authentication routes: register, verify-email, login, 2FA, refresh, me, logout."""
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -9,11 +9,13 @@ from sqlalchemy.orm import Session
 from app.models.database import User
 from app.schemas import UserResponse
 from app.schemas.auth import (
+    ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
     RegisterRequest,
     ResendOTPRequest,
     TokenResponse,
+    UpdateProfileRequest,
     Verify2FARequest,
     VerifyEmailRequest,
 )
@@ -201,6 +203,62 @@ def refresh(current_user: User = Depends(get_current_user)):
 def me(current_user: User = Depends(get_current_user)):
     """Return the currently authenticated user's profile."""
     return current_user
+
+
+# ── Update profile ────────────────────────────────────────────────────────────
+
+
+@router.put("/me", response_model=UserResponse)
+def update_me(
+    payload: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update the authenticated user's profile (full name)."""
+    current_user.full_name = payload.full_name.strip()
+    current_user.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(current_user)
+    logger.info("Profile updated", extra={"user_id": current_user.id})
+    return current_user
+
+
+# ── Change password ───────────────────────────────────────────────────────────
+
+
+@router.post("/change-password")
+def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Change the authenticated user's password after verifying the current one."""
+    if not auth_service.verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+    current_user.password_hash = auth_service.hash_password(payload.new_password)
+    current_user.updated_at = datetime.utcnow()
+    db.commit()
+    logger.info("Password changed", extra={"user_id": current_user.id})
+    return {"message": "Password changed successfully"}
+
+
+# ── Delete account ────────────────────────────────────────────────────────────
+
+
+@router.delete("/me")
+def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete the authenticated user's account and all associated data."""
+    user_id = current_user.id
+    db.delete(current_user)
+    db.commit()
+    logger.info("Account deleted", extra={"user_id": user_id})
+    return {"message": "Account deleted successfully"}
 
 
 # ── Logout ────────────────────────────────────────────────────────────────────
